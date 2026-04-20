@@ -92,9 +92,17 @@ if realm list 2>/dev/null | grep -q "^${DOMAIN}$"; then
     warn "Already joined to $DOMAIN — skipping realm join."
 else
     info "Joining domain $DOMAIN as $ADMIN_USER..."
-    JOIN_ARGS=(--user="$ADMIN_USER")
-    [[ -n "$COMPUTER_OU" ]] && JOIN_ARGS+=(--computer-ou="$COMPUTER_OU")
-    realm join "${JOIN_ARGS[@]}" "$DOMAIN"
+    # realm/adcli writes its own temporary krb5.conf snippet which overrides
+    # /etc/krb5.conf and causes "Message stream modified" when setting the
+    # computer password. Force adcli to use our krb5.conf via KRB5_CONFIG.
+    ADCLI_ARGS=(
+        join --verbose
+        --domain "$DOMAIN"
+        --domain-realm "$REALM"
+        --login-user="$ADMIN_USER"
+    )
+    [[ -n "$COMPUTER_OU" ]] && ADCLI_ARGS+=(--computer-ou="$COMPUTER_OU")
+    KRB5_CONFIG=/etc/krb5.conf adcli "${ADCLI_ARGS[@]}"
     info "Domain join complete."
 fi
 
