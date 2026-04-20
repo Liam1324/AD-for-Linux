@@ -92,17 +92,31 @@ if realm list 2>/dev/null | grep -q "^${DOMAIN}$"; then
     warn "Already joined to $DOMAIN — skipping realm join."
 else
     info "Joining domain $DOMAIN as $ADMIN_USER..."
-    # realm/adcli writes its own temporary krb5.conf snippet which overrides
-    # /etc/krb5.conf and causes "Message stream modified" when setting the
-    # computer password. Force adcli to use our krb5.conf via KRB5_CONFIG.
-    ADCLI_ARGS=(
-        join --verbose
-        --domain "$DOMAIN"
-        --domain-realm "$REALM"
-        --login-user="$ADMIN_USER"
-    )
-    [[ -n "$COMPUTER_OU" ]] && ADCLI_ARGS+=(--computer-ou="$COMPUTER_OU")
-    KRB5_CONFIG=/etc/krb5.conf adcli "${ADCLI_ARGS[@]}"
+
+    # adcli ignores KRB5_CONFIG when setting the computer account password,
+    # causing "Message stream modified" due to enctype mismatch.
+    # Fix: use kinit (which respects our krb5.conf) to obtain a TGT first,
+    # then use `net ads join -k` which reuses the existing ticket and avoids
+    # the Kerberos password-change negotiation entirely.
+
+    # Write a minimal smb.conf so net ads knows the workgroup/realm
+    mkdir -p /etc/samba
+    cat > /etc/samba/smb.conf <<EOF
+[global]
+    workgroup = ${REALM%%.*}
+    realm = ${REALM}
+    security = ads
+    kerberos method = secrets and keytab
+EOF
+
+    info "Obtaining Kerberos ticket for $ADMIN_USER@$REALM..."
+    KRB5_CONFIG=/etc/krb5.conf kinit "$ADMIN_USER@$REALM"
+
+    NET_ARGS=(-k -S "sp-ad.${DOMAIN}")
+    [[ -n "$COMPUTER_OU" ]] && NET_ARGS+=(createcomputer="$COMPUTER_OU")
+    KRB5_CONFIG=/etc/krb5.conf net ads join "${NET_ARGS[@]}"
+
+    kdestroy 2>/dev/null || true
     info "Domain join complete."
 fi
 
