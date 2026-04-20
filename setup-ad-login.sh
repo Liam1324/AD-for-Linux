@@ -58,11 +58,36 @@ apt-get install -y -qq \
     2>/dev/null
 info "Packages installed."
 
-# ── 2. Discover the domain ────────────────────────────────────────────────────
+# ── 2. Write krb5.conf ───────────────────────────────────────────────────────
+# Must be done before realm join so adcli uses supported enctypes.
+info "Writing /etc/krb5.conf..."
+cat > /etc/krb5.conf <<EOF
+[libdefaults]
+default_realm = ${REALM}
+rdns = false
+allow_weak_crypto = true
+default_tgs_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96 rc4-hmac
+default_tkt_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96 rc4-hmac
+permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96 rc4-hmac
+udp_preference_limit = 0
+
+[realms]
+    ${REALM} = {
+        kdc = sp-ad.${DOMAIN}
+        admin_server = sp-ad.${DOMAIN}
+    }
+
+[domain_realm]
+    .${DOMAIN} = ${REALM}
+    ${DOMAIN} = ${REALM}
+EOF
+info "krb5.conf written."
+
+# ── 3. Discover the domain ────────────────────────────────────────────────────
 info "Discovering domain: $DOMAIN"
 realm discover "$DOMAIN" || error "Cannot reach domain $DOMAIN. Check DNS and network."
 
-# ── 3. Join the domain (skip if already joined) ───────────────────────────────
+# ── 4. Join the domain (skip if already joined) ───────────────────────────────
 if realm list 2>/dev/null | grep -q "^${DOMAIN}$"; then
     warn "Already joined to $DOMAIN — skipping realm join."
 else
@@ -93,9 +118,8 @@ ad_domain = ${DOMAIN}
 use_fully_qualified_names = True
 access_provider = ad
 
-# Use uidNumber/gidNumber attributes set on AD user objects.
-# This avoids the SID-hash UIDs (~712000000) that break inside
-# LXC containers with a 0-65535 UID namespace.
+# Use uidNumber/gidNumber attributes set on AD user objects
+# instead of auto-generating UIDs from the SID hash.
 ldap_id_mapping = False
 
 # Allow SSH (system-auth) logins despite AD GPO restrictions.
@@ -141,8 +165,8 @@ info "Verifying domain connectivity..."
 if id "administrator@${DOMAIN}" &>/dev/null; then
     info "Domain lookup working: $(id administrator@${DOMAIN})"
 else
-    warn "Could not resolve administrator@${DOMAIN} — check that uidNumber is set in AD."
-    warn "On DC:  Set-ADUser -Identity administrator -Replace @{uidNumber=10003; gidNumber=10001}"
+    warn "Could not resolve administrator@${DOMAIN} — check that uidNumber/gidNumber are set in AD."
+    warn "On DC:  Set-ADUser -Identity <username> -Replace @{uidNumber=<uid>; gidNumber=<gid>; unixHomeDirectory='/home/...'; loginShell='/bin/bash'}"
 fi
 
 echo ""
